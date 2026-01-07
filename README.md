@@ -1,6 +1,6 @@
-# mop
+# mop (Machine On Proxy)
 
-**mop** is a lightweight TCP proxy designed to wake up machines on-demand. It sits between your client and your destination, intercepting connection attempts to transparently power on the target, either via Wake-on-LAN or the Proxmox API—before proxying the traffic.
+**mop** or **Machine On Proxy** is a lightweight TCP proxy designed to wake up machines on-demand. It sits between your client and your destination, intercepting connection attempts to transparently power on the target, either via Wake-on-LAN or the Proxmox API—before proxying the traffic.
 
 ## Why mop?
 
