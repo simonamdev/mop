@@ -8,6 +8,23 @@
 
 ## Usage
 
+### Run with Docker
+
+Pre-built images are available on GitHub Container Registry for both amd64 and arm64.
+
+You can run `mop` using `docker run`:
+
+```bash
+docker run -d \
+  --name mop \
+  --restart unless-stopped \
+  -p 2222:2222 \
+  --env-file .env \
+  ghcr.io/simonamdev/mop:latest
+```
+
+Make sure your `.env` file is properly configured as described in the [Configuration](#configuration) section below.
+
 ### Configuration
 
 `mop` is configured entirely via environment variables. You can define these in a `.env` file in the working directory.
