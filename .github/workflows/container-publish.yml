@@ -19,8 +19,10 @@ jobs:
         include:
           - os: ubuntu-24.04
             platform: linux/amd64
+            platform_suffix: linux-amd64
           - os: ubuntu-24.04-arm
             platform: linux/arm64
+            platform_suffix: linux-arm64
     permissions:
       contents: read
       packages: write
@@ -63,7 +65,7 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ matrix.platform }}
+          name: digests-${{ matrix.platform_suffix }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
