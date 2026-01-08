@@ -1,0 +1,26 @@
+# Proxy Configuration
+proxy_host = "0.0.0.0"
+proxy_port = 2222
+
+# Target Configuration
+target_host = "192.168.1.100"
+target_port = 22
+connection_retries = 15
+retry_delay_seconds = 5 # seconds
+
+# Wake-on-LAN (WOL) Configuration
+# method can be "wol", "proxmox", or "noop"
+method = "wol"
+
+# WOL Provider Settings
+target_mac = "AA:BB:CC:DD:EE:FF"
+target_broadcast_ip = "255.255.255.255"
+
+# Proxmox Provider Settings
+# Only required if method = "proxmox"
+# proxmox_api_url = "https://192.168.1.5:8006/api2/json"
+# proxmox_node = "pve"
+# proxmox_vmid = "100"
+# proxmox_token = "user@pam!token_id=secret"
+# proxmox_type = "qemu" # or "lxc"
+# proxmox_insecure = false

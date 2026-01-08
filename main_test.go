@@ -2,67 +2,72 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestLoadConfig(t *testing.T) {
-	// Save original env
-	originalEnv := os.Environ()
-	defer func() {
-		os.Clearenv()
-		for _, e := range originalEnv {
-			pair := splitEnv(e)
-			os.Setenv(pair[0], pair[1])
-		}
-	}()
-
 	tests := []struct {
-		name      string
-		env       map[string]string
-		expectErr bool
+		name        string
+		fileContent string
+		expectErr   bool
 	}{
 		{
 			name: "Valid WOL Config",
-			env: map[string]string{
-				"TARGET_HOST":   "example.com",
-				"TARGET_MAC":    "AA:BB:CC:DD:EE:FF",
-				"WAKEUP_METHOD": "wol",
-			},
+			fileContent: `
+proxy_host = "0.0.0.0"
+proxy_port = 2222
+target_host = "example.com"
+target_port = 22
+method = "wol"
+target_mac = "AA:BB:CC:DD:EE:FF"
+`,
 			expectErr: false,
 		},
 		{
 			name: "Missing Target Host",
-			env: map[string]string{
-				"TARGET_MAC": "AA:BB:CC:DD:EE:FF",
-			},
+			fileContent: `
+method = "wol"
+target_mac = "AA:BB:CC:DD:EE:FF"
+`,
 			expectErr: true,
 		},
 		{
 			name: "Missing MAC for WOL",
-			env: map[string]string{
-				"TARGET_HOST":   "example.com",
-				"WAKEUP_METHOD": "wol",
-			},
+			fileContent: `
+target_host = "example.com"
+method = "wol"
+`,
 			expectErr: true,
 		},
 		{
-			name: "Valid Noop Config (No MAC)",
-			env: map[string]string{
-				"TARGET_HOST":   "example.com",
-				"WAKEUP_METHOD": "noop",
-			},
+			name: "Valid Noop Config",
+			fileContent: `
+target_host = "example.com"
+method = "noop"
+`,
 			expectErr: false,
+		},
+		{
+			name: "Invalid Config Syntax",
+			fileContent: `
+target_host = "example.com
+method = "wol"
+`, // Missing quote
+			expectErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			os.Clearenv()
-			for k, v := range tt.env {
-				os.Setenv(k, v)
+			tmpDir := t.TempDir()
+			configFile := filepath.Join(tmpDir, "config.toml")
+			err := os.WriteFile(configFile, []byte(tt.fileContent), 0644)
+			if err != nil {
+				t.Fatalf("Failed to write temp config: %v", err)
 			}
 
-			_, err := loadConfig()
+			_, err = loadConfig(configFile)
 			if tt.expectErr && err == nil {
 				t.Error("Expected error, got nil")
 			}
@@ -71,13 +76,4 @@ func TestLoadConfig(t *testing.T) {
 			}
 		})
 	}
-}
-
-func splitEnv(s string) []string {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '=' {
-			return []string{s[:i], s[i+1:]}
-		}
-	}
-	return []string{s, ""}
 }

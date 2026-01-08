@@ -11,128 +11,81 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/BurntSushi/toml"
 )
 
-// Config holds the application configuration, loaded from environment variables.
+// Config holds the application configuration.
 type Config struct {
-	ProxyHost         string
-	ProxyPort         int
-	TargetHost        string
-	TargetPort        int
-	TargetMAC         string
-	TargetBroadcastIP string
-	ProxmoxAPIURL     string
-	ProxmoxNode       string
-	ProxmoxVMID       string
-	ProxmoxToken      string
-	ProxmoxType       string
-	ProxmoxInsecure   bool
-	WakeupMethod      string
-	ConnectionRetries int
-	RetryDelaySeconds time.Duration
+	ProxyHost         string `toml:"proxy_host"`
+	ProxyPort         int    `toml:"proxy_port"`
+	TargetHost        string `toml:"target_host"`
+	TargetPort        int    `toml:"target_port"`
+	TargetMAC         string `toml:"target_mac"`
+	TargetBroadcastIP string `toml:"target_broadcast_ip"`
+	ProxmoxAPIURL     string `toml:"proxmox_api_url"`
+	ProxmoxNode       string `toml:"proxmox_node"`
+	ProxmoxVMID       string `toml:"proxmox_vmid"`
+	ProxmoxToken      string `toml:"proxmox_token"`
+	ProxmoxType       string `toml:"proxmox_type"`
+	ProxmoxInsecure   bool   `toml:"proxmox_insecure"`
+	WakeupMethod      string `toml:"method"`
+	ConnectionRetries int    `toml:"connection_retries"`
+	RetryDelaySeconds int    `toml:"retry_delay_seconds"`
 }
 
-// loadConfig loads configuration from environment variables with defaults.
-func loadConfig() (*Config, error) {
-	// Helper to get an environment variable or return a default value.
-	getEnv := func(key, fallback string) string {
-		if value, exists := os.LookupEnv(key); exists {
-			return value
-		}
-		return fallback
+// loadConfig loads configuration from the specified file.
+func loadConfig(configFile string) (*Config, error) {
+	if configFile == "" {
+		configFile = "config.toml"
+	}
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		return nil, fmt.Errorf("configuration file %s not found. Please create one based on config.example.toml", configFile)
 	}
 
-	// Helper to get an integer environment variable.
-	getEnvAsInt := func(key string, fallback int) (int, error) {
-		strValue := getEnv(key, "")
-		if strValue == "" {
-			return fallback, nil
-		}
-		val, err := strconv.Atoi(strValue)
-		if err != nil {
-			return 0, fmt.Errorf("invalid value for %s: %v", key, err)
-		}
-		return val, nil
+	// Set defaults
+	cfg := &Config{
+		ProxyHost:         "0.0.0.0",
+		ProxyPort:         2222,
+		TargetPort:        22,
+		TargetBroadcastIP: "255.255.255.255",
+		ProxmoxType:       "qemu",
+		WakeupMethod:      "wol",
+		ConnectionRetries: 15,
+		RetryDelaySeconds: 5,
 	}
 
-	getEnvAsBool := func(key string, fallback bool) bool {
-		strValue := getEnv(key, "")
-		if strValue == "" {
-			return fallback
-		}
-		val, err := strconv.ParseBool(strValue)
-		if err != nil {
-			return fallback
-		}
-		return val
+	if _, err := toml.DecodeFile(configFile, cfg); err != nil {
+		return nil, fmt.Errorf("failed to decode config file: %v", err)
 	}
 
-	targetHost := os.Getenv("TARGET_HOST")
-	if targetHost == "" {
-		return nil, fmt.Errorf("TARGET_HOST environment variable is required")
+	// Validation
+	if cfg.TargetHost == "" {
+		return nil, fmt.Errorf("target_host is required")
 	}
 
-	wakeupMethod := strings.ToLower(getEnv("WAKEUP_METHOD", "wol"))
-	targetMAC := os.Getenv("TARGET_MAC")
-
-	// Validation depends on wakeup method
-	switch wakeupMethod {
+	cfg.WakeupMethod = strings.ToLower(cfg.WakeupMethod)
+	switch cfg.WakeupMethod {
 	case "wol":
-		if targetMAC == "" {
-			return nil, fmt.Errorf("TARGET_MAC environment variable is required when WAKEUP_METHOD is 'wol'")
+		if cfg.TargetMAC == "" {
+			return nil, fmt.Errorf("target_mac is required when method is 'wol'")
 		}
 	case "proxmox":
-		if getEnv("PROXMOX_API_URL", "") == "" {
-			return nil, fmt.Errorf("PROXMOX_API_URL is required when WAKEUP_METHOD is 'proxmox'")
+		if cfg.ProxmoxAPIURL == "" {
+			return nil, fmt.Errorf("proxmox_api_url is required when method is 'proxmox'")
 		}
-		if getEnv("PROXMOX_NODE", "") == "" {
-			return nil, fmt.Errorf("PROXMOX_NODE is required when WAKEUP_METHOD is 'proxmox'")
+		if cfg.ProxmoxNode == "" {
+			return nil, fmt.Errorf("proxmox_node is required when method is 'proxmox'")
 		}
-		if getEnv("PROXMOX_VMID", "") == "" {
-			return nil, fmt.Errorf("PROXMOX_VMID is required when WAKEUP_METHOD is 'proxmox'")
+		if cfg.ProxmoxVMID == "" {
+			return nil, fmt.Errorf("proxmox_vmid is required when method is 'proxmox'")
 		}
-		if getEnv("PROXMOX_TOKEN", "") == "" {
-			return nil, fmt.Errorf("PROXMOX_TOKEN is required when WAKEUP_METHOD is 'proxmox'")
+		if cfg.ProxmoxToken == "" {
+			return nil, fmt.Errorf("proxmox_token is required when method is 'proxmox'")
 		}
 	}
 
-	proxyPort, err := getEnvAsInt("PROXY_PORT", 2222)
-	if err != nil {
-		return nil, err
-	}
-
-	targetPort, err := getEnvAsInt("TARGET_PORT", 22)
-	if err != nil {
-		return nil, err
-	}
-
-	connectionRetries, err := getEnvAsInt("CONNECTION_RETRIES", 15)
-	if err != nil {
-		return nil, err
-	}
-
-	retryDelay, err := getEnvAsInt("RETRY_DELAY_SECONDS", 5)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Config{
-		ProxyHost:         getEnv("PROXY_HOST", "0.0.0.0"),
-		ProxyPort:         proxyPort,
-		TargetHost:        targetHost,
-		TargetPort:        targetPort,
-		TargetMAC:         targetMAC,
-		TargetBroadcastIP: getEnv("TARGET_BROADCAST_IP", "255.255.255.255"),
-		ProxmoxAPIURL:     getEnv("PROXMOX_API_URL", ""),
-		ProxmoxNode:       getEnv("PROXMOX_NODE", ""),
-		ProxmoxVMID:       getEnv("PROXMOX_VMID", ""),
-		ProxmoxToken:      getEnv("PROXMOX_TOKEN", ""),
-		ProxmoxType:       getEnv("PROXMOX_TYPE", "qemu"), // default to qemu (VM), can be lxc
-		ProxmoxInsecure:   getEnvAsBool("PROXMOX_INSECURE", false),
-		WakeupMethod:      wakeupMethod,
-		ConnectionRetries: connectionRetries,
-		RetryDelaySeconds: time.Duration(retryDelay) * time.Second,
-	}, nil
+	return cfg, nil
 }
 
 // proxyTraffic bi-directionally copies data between two connections.
@@ -175,13 +128,13 @@ func handleClient(clientConn net.Conn, cfg *Config, wakeupProvider provider.Wake
 
 	log.Printf("Attempting to connect to target %s...", targetAddr)
 	for i := 0; i < cfg.ConnectionRetries; i++ {
-		targetConn, err = net.DialTimeout("tcp", targetAddr, cfg.RetryDelaySeconds)
+		targetConn, err = net.DialTimeout("tcp", targetAddr, time.Duration(cfg.RetryDelaySeconds)*time.Second)
 		if err == nil {
 			log.Printf("Successfully connected to target %s on attempt %d.", targetAddr, i+1)
 			break
 		}
-		log.Printf("Attempt %d/%d failed to connect to target: %v. Retrying in %v...", i+1, cfg.ConnectionRetries, err, cfg.RetryDelaySeconds)
-		time.Sleep(cfg.RetryDelaySeconds)
+		log.Printf("Attempt %d/%d failed to connect to target: %v. Retrying in %d seconds...", i+1, cfg.ConnectionRetries, err, cfg.RetryDelaySeconds)
+		time.Sleep(time.Duration(cfg.RetryDelaySeconds) * time.Second)
 	}
 
 	if targetConn == nil {
@@ -195,7 +148,7 @@ func handleClient(clientConn net.Conn, cfg *Config, wakeupProvider provider.Wake
 }
 
 func main() {
-	cfg, err := loadConfig()
+	cfg, err := loadConfig("config.toml")
 	if err != nil {
 		log.Fatalf("Configuration error: %v", err)
 	}
