@@ -19,6 +19,7 @@ docker run -d \
   --name mop \
   --restart unless-stopped \
   -p 2222:2222 \
+  -p 8080:8080 \
   --env-file .env \
   ghcr.io/simonamdev/mop:latest
 ```
@@ -33,10 +34,36 @@ Make sure your `.env` file is properly configured as described in the [Configura
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PROXY_PORT` | The port `mop` listens on locally. | `2222` |
+| `HEALTH_PORT` | The port `mop` listens on for Kubernetes health checks. | `8080` |
+| `HEALTH_HOST` | The host `mop` binds the health server to. | `0.0.0.0` |
+| `HEALTH_ENABLED` | Whether to enable the health check server (`true`/`false`). | `true` |
 | `TARGET_HOST` | The IP address or hostname of the target machine. | *(Required)* |
 | `TARGET_PORT` | The port on the target machine (e.g., 22 for SSH). | `22` |
 | `CONNECTION_RETRIES`| Number of times to retry connecting after wakeup. | `15` |
 | `RETRY_DELAY_SECONDS`| Seconds to wait between connection retries. | `5` |
+
+### Health Checks
+
+`mop` includes a lightweight HTTP health check server (default port `8080`). This allows Kubernetes liveness/readiness probes and uptime monitors to verify that `mop` is alive and running without connecting to the proxy port and inadvertently waking up the target machine.
+
+Any `GET` or `HEAD` request to `/healthz`, `/health`, `/live`, `/ready`, or `/` immediately returns HTTP `200 OK` with body `ok`.
+
+#### Kubernetes Probes Example
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 2
+  periodSeconds: 10
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 2
+  periodSeconds: 10
+```
 
 #### Wake-on-LAN (WOL)
 

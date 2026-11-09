@@ -1,15 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"mop/provider"
 	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -17,6 +21,9 @@ import (
 type Config struct {
 	ProxyHost         string
 	ProxyPort         int
+	HealthHost        string
+	HealthPort        int
+	HealthEnabled     bool
 	TargetHost        string
 	TargetPort        int
 	TargetMAC         string
@@ -30,6 +37,58 @@ type Config struct {
 	WakeupMethod      string
 	ConnectionRetries int
 	RetryDelaySeconds time.Duration
+}
+
+// createHealthHandler configures and returns an HTTP handler for Kubernetes liveness/readiness probes.
+func createHealthHandler() http.Handler {
+	mux := http.NewServeMux()
+
+	healthHandler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok\n"))
+	}
+
+	mux.HandleFunc("/healthz", healthHandler)
+	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/live", healthHandler)
+	mux.HandleFunc("/ready", healthHandler)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		healthHandler(w, r)
+	})
+
+	return mux
+}
+
+// startHealthServer starts the HTTP health server asynchronously.
+func startHealthServer(cfg *Config) (*http.Server, net.Listener, error) {
+	healthAddr := net.JoinHostPort(cfg.HealthHost, strconv.Itoa(cfg.HealthPort))
+	healthListener, err := net.Listen("tcp", healthAddr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to start health listener on %s: %w", healthAddr, err)
+	}
+
+	server := &http.Server{
+		Handler:           createHealthHandler(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		log.Printf("Health server listening on %s", healthAddr)
+		if err := server.Serve(healthListener); err != nil && err != http.ErrServerClosed {
+			log.Printf("Health server error: %v", err)
+		}
+	}()
+
+	return server, healthListener, nil
 }
 
 // loadConfig loads configuration from environment variables with defaults.
@@ -100,11 +159,35 @@ func loadConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if proxyPort <= 0 || proxyPort > 65535 {
+		return nil, fmt.Errorf("PROXY_PORT must be between 1 and 65535")
+	}
 
 	targetPort, err := getEnvAsInt("TARGET_PORT", 22)
 	if err != nil {
 		return nil, err
 	}
+	if targetPort <= 0 || targetPort > 65535 {
+		return nil, fmt.Errorf("TARGET_PORT must be between 1 and 65535")
+	}
+
+	healthEnabled := getEnvAsBool("HEALTH_ENABLED", getEnvAsBool("STATUS_ENABLED", true))
+	healthPortStr := getEnv("HEALTH_PORT", getEnv("STATUS_PORT", "8080"))
+	healthPort, err := strconv.Atoi(healthPortStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid value for HEALTH_PORT: %v", err)
+	}
+	if !healthEnabled || healthPort == 0 {
+		healthEnabled = false
+	} else if healthPort < 0 || healthPort > 65535 {
+		return nil, fmt.Errorf("HEALTH_PORT must be between 1 and 65535")
+	}
+	if healthEnabled && healthPort == proxyPort {
+		return nil, fmt.Errorf("HEALTH_PORT (%d) cannot be the same as PROXY_PORT (%d)", healthPort, proxyPort)
+	}
+
+	proxyHost := getEnv("PROXY_HOST", "0.0.0.0")
+	healthHost := getEnv("HEALTH_HOST", getEnv("STATUS_HOST", proxyHost))
 
 	connectionRetries, err := getEnvAsInt("CONNECTION_RETRIES", 15)
 	if err != nil {
@@ -117,8 +200,11 @@ func loadConfig() (*Config, error) {
 	}
 
 	return &Config{
-		ProxyHost:         getEnv("PROXY_HOST", "0.0.0.0"),
+		ProxyHost:         proxyHost,
 		ProxyPort:         proxyPort,
+		HealthHost:        healthHost,
+		HealthPort:        healthPort,
+		HealthEnabled:     healthEnabled,
 		TargetHost:        targetHost,
 		TargetPort:        targetPort,
 		TargetMAC:         targetMAC,
@@ -208,6 +294,16 @@ func main() {
 	defer listener.Close()
 	log.Printf("mop server listening on %s", listenAddr)
 
+	var healthServer *http.Server
+	if cfg.HealthEnabled {
+		var healthListener net.Listener
+		healthServer, healthListener, err = startHealthServer(cfg)
+		if err != nil {
+			log.Fatalf("Health server error: %v", err)
+		}
+		defer healthListener.Close()
+	}
+
 	var wakeupProvider provider.WakeupProvider
 	switch cfg.WakeupMethod {
 	case "wol":
@@ -231,11 +327,33 @@ func main() {
 	}
 	log.Printf("Using wakeup provider: %T", wakeupProvider)
 
+	stopChan := make(chan struct{})
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigChan
+		log.Printf("Received signal %s, shutting down...", sig)
+		close(stopChan)
+		listener.Close()
+		if healthServer != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = healthServer.Shutdown(ctx)
+		}
+	}()
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Printf("Failed to accept connection: %v", err)
-			continue
+			select {
+			case <-stopChan:
+				log.Println("Listener closed, mop server shutting down.")
+				return
+			default:
+				log.Printf("Failed to accept connection: %v", err)
+				continue
+			}
 		}
 		// Handle each client connection in a new goroutine
 		go handleClient(conn, cfg, wakeupProvider)

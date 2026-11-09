@@ -12,4 +12,6 @@ WORKDIR /app
 
 COPY --from=builder /app/mop .
 
+EXPOSE 2222 8080
+
 CMD ["./mop"]
